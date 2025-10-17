@@ -2,7 +2,7 @@
 import crypto from 'crypto';
 import { VercelWebhookEvent } from '../../../types';
 
-const { WEBHOOK_INTEGRATION_SECRET, DISCORD_WEBHOOK_URL } = process.env;
+const { WEBHOOK_INTEGRATION_SECRET, DISCORD_WEBHOOK_URL, VERCEL_TOKEN, VERCEL_TEAM_ID } = process.env;
 
 export const POST = async (req: Request, res: Response) => {
     console.log('=== Webhook received ===');
@@ -76,6 +76,65 @@ function sha1(data: Buffer, secret: string): string {
     return crypto.createHmac('sha1', secret).update(data).digest('hex');
 }
 
+async function fetchVercelBuildLogs(deploymentId: string): Promise<string> {
+    if (!VERCEL_TOKEN) {
+        console.warn('VERCEL_TOKEN not configured, skipping build logs fetch');
+        return 'Build logs unavailable (VERCEL_TOKEN not configured)';
+    }
+
+    try {
+        console.log('Fetching build logs for deployment:', deploymentId);
+        
+        const url = VERCEL_TEAM_ID 
+            ? `https://api.vercel.com/v3/deployments/${deploymentId}/events?teamId=${VERCEL_TEAM_ID}`
+            : `https://api.vercel.com/v3/deployments/${deploymentId}/events`;
+
+        console.log('Vercel API URL:', url);
+
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `Bearer ${VERCEL_TOKEN}`,
+            },
+        });
+
+        console.log('Vercel API response status:', response.status);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Failed to fetch Vercel logs:', errorText);
+            return `Failed to fetch build logs: ${response.status}`;
+        }
+
+        const data = await response.json();
+        console.log('Received', data.length, 'log events');
+
+        const errorLogs = data
+            .filter((event: any) => event.type === 'stderr' || event.type === 'error' || (event.type === 'stdout' && event.payload?.text?.toLowerCase().includes('error')))
+            .map((event: any) => event.payload?.text || event.text)
+            .filter(Boolean)
+            .join('\n');
+
+        if (errorLogs) {
+            console.log('Found error logs, length:', errorLogs.length);
+            return errorLogs.substring(0, 1500);
+        }
+
+        const allLogs = data
+            .filter((event: any) => event.type === 'stdout' || event.type === 'stderr')
+            .slice(-30)
+            .map((event: any) => event.payload?.text || event.text)
+            .filter(Boolean)
+            .join('\n');
+
+        console.log('Using last build logs, length:', allLogs.length);
+        return allLogs.substring(0, 1500) || 'No logs available';
+
+    } catch (error) {
+        console.error('Error fetching Vercel build logs:', error);
+        return 'Error fetching build logs: ' + (error instanceof Error ? error.message : String(error));
+    }
+}
+
 async function sendDiscordMessageFor(vercelEvent: VercelWebhookEvent) {
     console.log('--- Building Discord message ---');
 
@@ -89,6 +148,7 @@ async function sendDiscordMessageFor(vercelEvent: VercelWebhookEvent) {
     const githubCommitSha = vercelEvent.payload.deployment.meta["githubCommitSha"];
     const githubCommitUrl = `https://github.com/${githubOrg}/${githubCommitRepo}/commit/${githubCommitSha}`
     const githubCommitMessage = vercelEvent.payload.deployment.meta["githubCommitMessage"];
+    const deploymentId = vercelEvent.payload.deployment.id;
 
     console.log('Deployment info:', {
         name,
@@ -98,7 +158,39 @@ async function sendDiscordMessageFor(vercelEvent: VercelWebhookEvent) {
         githubCommitRepo,
         githubCommitSha: githubCommitSha?.substring(0, 7),
         githubCommitMessage: githubCommitMessage?.substring(0, 50),
+        deploymentId,
     });
+
+    const fields: Array<{ name: string; value: string }> = [
+        {
+            name: 'Project',
+            value: `[${name}](${projectUrl})`,
+        },
+        {
+            name: 'Branch',
+            value: gitBranch,
+        },
+        {
+            name: 'Commit',
+            value: `[${githubCommitSha}](${githubCommitUrl})`,
+        },
+        {
+            name: 'Commit Message',
+            value: githubCommitMessage,
+        },
+    ];
+
+    if (state === 'ERROR' || state === 'CANCELED') {
+        console.log('Fetching build logs for failed deployment...');
+        const buildLogs = await fetchVercelBuildLogs(deploymentId);
+        
+        if (buildLogs && buildLogs.length > 0) {
+            fields.push({
+                name: 'Build Logs',
+                value: '```\n' + buildLogs + '\n```',
+            });
+        }
+    }
 
     const discordMessage = {
         content: null,
@@ -106,25 +198,8 @@ async function sendDiscordMessageFor(vercelEvent: VercelWebhookEvent) {
             title: `Deployment of ${name} in ${gitBranch.toUpperCase()}: ${state}.`,
             url: deploymentDashboardUrl,
             description: `The deployment for ${name} is now ${state}.`,
-            color: state === 'SUCCEEDED' ? 3066993 : 15158332, // Green for success, red for failure
-            fields: [
-                {
-                    name: 'Project',
-                    value: `[${name}](${projectUrl})`,
-                },
-                {
-                    name: 'Branch',
-                    value: gitBranch,
-                },
-                {
-                    name: 'Commit',
-                    value: `[${githubCommitSha}](${githubCommitUrl})`,
-                },
-                {
-                    name: 'Commit Message',
-                    value: githubCommitMessage,
-                },
-            ],
+            color: state === 'SUCCEEDED' ? 3066993 : 15158332,
+            fields,
         }],
     };
 

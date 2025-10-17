@@ -24,6 +24,13 @@ WEBHOOK_INTEGRATION_SECRET=VAn**********************
 
 # Get this from the Discord UI when setting up a destination webhook
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/**************/39NQ**************************************************************
+
+# Optional: To include build logs in Discord for failed deployments
+# Create token at https://vercel.com/account/tokens
+VERCEL_TOKEN=your_token_here
+
+# Optional: If using Vercel team account
+VERCEL_TEAM_ID=team_xxxxx
 ```
 
 
