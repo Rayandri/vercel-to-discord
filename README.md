@@ -20,7 +20,7 @@ This is an extremely simple next.js app that enables you to show Vercel deployme
 
 ```
 # Get this from the Vercel webui when setting up your webhook
-VERCEL_WEBHOOK_INTEGRATION_SECRET=VAn**********************
+WEBHOOK_INTEGRATION_SECRET=VAn**********************
 
 # Get this from the Discord UI when setting up a destination webhook
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/**************/39NQ**************************************************************
